@@ -42,7 +42,7 @@ def parse_allowed_origins(value: str | None) -> list[str]:
 
 
 app = FastAPI(
-    title="Programming Pathshala Club API",
+    title="Gyansutra AI API",
     description="Backend API for the programming club learning portal.",
     version="0.1.0",
 )
@@ -58,7 +58,7 @@ app.add_middleware(
 
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
-ADMIN_EMAIL = "admin@pathshala.com"
+ADMIN_EMAIL = "admin@gyansutra.com"
 ADMIN_PASSWORD = "admin123"
 ADMIN_TOKEN = "pp-admin-demo-token"
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".doc", ".docx", ".png", ".jpg", ".jpeg", ".webp"}
@@ -368,7 +368,7 @@ events: list[Event] = [
         event_time=time(10, 0),
         mode="Lab 2",
         description="Practice arrays, hashing, and two-pointer patterns with peer review after every round.",
-        speaker="Programming Pathshala Club",
+        speaker="Gyansutra AI",
         registration_link="https://example.com/events/dsa-jam",
     ),
     Event(
@@ -636,7 +636,7 @@ student_resumes: dict[int, StudentResume] = {
         summary="Computer Science student seeking a fresher software role with strong foundations in frontend development, APIs, SQL, and problem solving.",
         education="B.Tech Computer Science, 2026 - ABC Institute of Technology, CGPA: 8.4/10\nClass XII - Science Stream, 2022, 86%",
         skills="React, TypeScript, JavaScript, Python, SQL, HTML, CSS, Git",
-        projects="Placement Portal - Built job listing and resume builder screens using Next.js.\nAPI Tracker - Created a FastAPI service for tracking study tasks.",
+        projects="Gyansutra AI - Built job listing and resume builder screens using Next.js.\nAPI Tracker - Created a FastAPI service for tracking study tasks.",
         experience="Frontend Intern - Improved reusable components and fixed responsive layout bugs.",
         achievements="Solved 250+ DSA problems across arrays, strings, trees, and dynamic programming.\nLed a team of 4 for a college hackathon prototype.",
         certifications="Python Basics Certificate\nWeb Development Bootcamp",
@@ -1414,7 +1414,7 @@ def health_check() -> dict[str, str]:
 @app.get("/api/portal")
 def get_portal() -> dict[str, object]:
     return {
-        "club_name": "Programming Pathshala Club",
+        "club_name": "Gyansutra AI",
         "tagline": "Learn by building, sharing, and shipping real code.",
         "tracks": [
             {
