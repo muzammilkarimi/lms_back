@@ -15,6 +15,130 @@ from typing import Any, Literal
 from urllib import request
 from urllib.error import URLError
 from uuid import uuid4
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, ForeignKey, Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+
+# Database Connection Setup - Using IP to avoid DNS issues
+DB_HOST = os.getenv("DB_HOST", "193.203.168.209")
+DB_USER = os.getenv("DB_USER", "u613289423_gyansutra_lms")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "Gyansutra_lms@3214")
+DB_NAME = os.getenv("DB_NAME", "u613289423_gyansutra_lms")
+
+from urllib.parse import quote_plus
+DB_URL = f"mysql+mysqlconnector://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}/{DB_NAME}"
+engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# --- Database Models ---
+class StudentDB(Base):
+    __tablename__ = "students"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255))
+    email = Column(String(255), unique=True, index=True)
+    password_hash = Column(String(255))
+    phone = Column(String(50))
+    college = Column(String(255))
+    course = Column(String(255))
+    graduation_year = Column(String(20))
+    skills = Column(JSON) # List of skills
+    created_at = Column(DateTime, default=datetime.now)
+
+class JobDB(Base):
+    __tablename__ = "jobs"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255))
+    company = Column(String(255))
+    location = Column(String(255))
+    job_type = Column(String(100))
+    skills = Column(JSON)
+    description = Column(Text)
+    eligibility = Column(Text)
+    compensation = Column(String(255))
+    last_date = Column(DateTime)
+    apply_link = Column(String(1024))
+    attachment_name = Column(String(255))
+    attachment_url = Column(String(1024))
+    created_at = Column(DateTime, default=datetime.now)
+
+class ApplicationDB(Base):
+    __tablename__ = "applications"
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id"))
+    job_id = Column(Integer, ForeignKey("jobs.id"))
+    status = Column(String(50), default="applied")
+    admin_note = Column(Text)
+    ats_score = Column(Integer)
+    matched_keywords = Column(JSON)
+    missing_keywords = Column(JSON)
+    ai_suggestions = Column(JSON)
+    applied_with_ai_fix = Column(Boolean, default=False)
+    applied_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+class EventDB(Base):
+    __tablename__ = "events"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255))
+    event_date = Column(DateTime)
+    event_time = Column(String(50))
+    mode = Column(String(100))
+    description = Column(Text)
+    speaker = Column(String(255))
+    registration_link = Column(String(1024))
+    attachment_name = Column(String(255))
+    attachment_url = Column(String(1024))
+    created_at = Column(DateTime, default=datetime.now)
+
+class ClassDB(Base):
+    __tablename__ = "classes"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255))
+    mentor = Column(String(255))
+    class_date = Column(DateTime)
+    starts_at = Column(String(50))
+    link = Column(String(1024))
+    created_at = Column(DateTime, default=datetime.now)
+
+class MockInterviewDB(Base):
+    __tablename__ = "mock_interviews"
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id"))
+    role = Column(String(255))
+    round_type = Column(String(100))
+    skills = Column(JSON)
+    question_transcript = Column(Text) # All questions combined
+    answer_transcript = Column(Text)   # All answers combined
+    score = Column(Integer)
+    strength = Column(Text)
+    suggestions = Column(JSON)
+    sample_answer = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+
+class ActiveInterviewSessionDB(Base):
+    __tablename__ = "active_sessions"
+    session_id = Column(String(100), primary_key=True)
+    data = Column(JSON) # Stores the turn, transcript, etc.
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+# Create tables
+try:
+    Base.metadata.create_all(bind=engine)
+    print("✅ Database tables initialized successfully.")
+except Exception as e:
+    print(f"❌ Database initialization failed: {e}")
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,8 +173,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=parse_allowed_origins(os.getenv("APP_CORS_ORIGINS")),
-    allow_origin_regex=os.getenv("APP_CORS_ORIGIN_REGEX"),
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -284,6 +407,8 @@ class InterviewRequest(BaseModel):
     role: str = "Software Developer"
     round_type: Literal["technical", "hr", "mixed"] = "mixed"
     difficulty: Literal["beginner", "intermediate", "advanced"] = "intermediate"
+    persona: Literal["technical_expert", "friendly_recruiter", "tough_manager"] = "friendly_recruiter"
+    resume_text: str | None = None
 
 
 class InterviewAnswer(BaseModel):
@@ -608,53 +733,13 @@ classes: list[ClassSchedule] = [
     ),
 ]
 
-students: list[Student] = [
-    Student(
-        id=1,
-        name="Raj Student",
-        email="raj@example.com",
-        password_hash=sha256("student123".encode()).hexdigest(),
-        phone="+91 98765 43210",
-        college="ABC Institute of Technology",
-        course="B.Tech Computer Science",
-        graduation_year="2026",
-        skills=["React", "TypeScript", "SQL"],
-        created_at=datetime.now(),
-    )
-]
+students: list[Student] = []
 
 student_tokens: dict[str, int] = {}
 
-student_resumes: dict[int, StudentResume] = {
-    1: StudentResume(
-        student_id=1,
-        name="Raj Student",
-        role="Frontend Developer",
-        email="raj@example.com",
-        phone="+91 98765 43210",
-        links="linkedin.com/in/raj | github.com/raj",
-        summary="Computer Science student seeking a fresher software role with strong foundations in frontend development, APIs, SQL, and problem solving.",
-        education="B.Tech Computer Science, 2026 - ABC Institute of Technology, CGPA: 8.4/10\nClass XII - Science Stream, 2022, 86%",
-        skills="React, TypeScript, JavaScript, Python, SQL, HTML, CSS, Git",
-        projects="Gyansutra AI - Built job listing and resume builder screens using Next.js.\nAPI Tracker - Created a FastAPI service for tracking study tasks.",
-        experience="Frontend Intern - Improved reusable components and fixed responsive layout bugs.",
-        achievements="Solved 250+ DSA problems across arrays, strings, trees, and dynamic programming.\nLed a team of 4 for a college hackathon prototype.",
-        certifications="Python Basics Certificate\nWeb Development Bootcamp",
-        updated_at=datetime.now(),
-    )
-}
+student_resumes: dict[int, StudentResume] = {}
 
-job_applications: list[JobApplication] = [
-    JobApplication(
-        id=1,
-        student_id=1,
-        job_id=1,
-        status="under_review",
-        admin_note="Resume looks relevant. Review project links before shortlisting.",
-        applied_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-]
+job_applications: list[JobApplication] = []
 
 mock_attempts: list[MockInterviewAttempt] = []
 coding_attempts: list[CodingAttempt] = []
@@ -670,14 +755,77 @@ def hash_password(password: str) -> str:
 
 
 def find_student_by_email(email: str) -> Student | None:
-    return next((student for student in students if student.email.lower() == email.lower()), None)
+    db = SessionLocal()
+    from sqlalchemy import func
+    try:
+        student_record = db.query(StudentDB).filter(func.lower(StudentDB.email) == email.lower()).first()
+        if student_record:
+            return Student(
+                id=student_record.id,
+                name=student_record.name,
+                email=student_record.email,
+                password_hash=student_record.password_hash,
+                phone=student_record.phone or "",
+                college=student_record.college or "",
+                course=student_record.course or "",
+                graduation_year=student_record.graduation_year or "",
+                skills=student_record.skills or [],
+                created_at=student_record.created_at,
+            )
+        # Fallback to hardcoded for legacy
+        return next((student for student in students if student.email.lower() == email.lower()), None)
+    finally:
+        db.close()
 
+
+def find_student_by_id(student_id: int) -> Student | None:
+    db = SessionLocal()
+    try:
+        student_record = db.query(StudentDB).filter(StudentDB.id == student_id).first()
+        if student_record:
+            return Student(
+                id=student_record.id,
+                name=student_record.name,
+                email=student_record.email,
+                password_hash=student_record.password_hash,
+                phone=student_record.phone or "",
+                college=student_record.college or "",
+                course=student_record.course or "",
+                graduation_year=student_record.graduation_year or "",
+                skills=student_record.skills or [],
+                created_at=student_record.created_at,
+            )
+        return next((student for student in students if student.id == student_id), None)
+    finally:
+        db.close()
 
 def find_job(job_id: int) -> Job:
-    job = next((item for item in jobs if item.id == job_id), None)
-    if job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
-    return job
+    db = SessionLocal()
+    try:
+        j = db.query(JobDB).filter(JobDB.id == job_id).first()
+        if j:
+            return Job(
+                id=j.id,
+                title=j.title,
+                company=j.company,
+                location=j.location,
+                job_type=j.job_type,
+                skills=j.skills,
+                description=j.description,
+                eligibility=j.eligibility,
+                compensation=j.compensation,
+                last_date=j.last_date,
+                apply_link=j.apply_link,
+                attachment_name=j.attachment_name,
+                attachment_url=j.attachment_url,
+            )
+        # Fallback to legacy
+        job = next((item for item in jobs if item.id == job_id), None)
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+        return job
+    finally:
+        db.close()
 
 
 def find_coding_question(question_id: int) -> CodingQuestion:
@@ -1346,9 +1494,32 @@ def application_summary(application: JobApplication) -> dict[str, object]:
 
 
 def admin_application_detail(application: JobApplication) -> dict[str, object]:
-    student = next(item for item in students if item.id == application.student_id)
+    student = find_student_by_id(application.student_id)
+    if not student:
+        # Graceful fallback for legacy or deleted students
+        return {
+            "application_id": application.id,
+            "status": application.status,
+            "student_name": "Unknown Student",
+            "student_email": "N/A",
+            "mock_score": 0,
+            "coding_score": 0,
+        }
+
     attempts = [attempt for attempt in mock_attempts if attempt.student_id == student.id]
     latest_attempt = max(attempts, key=lambda item: item.created_at) if attempts else None
+    
+    # Also check DB for mock interviews
+    db = SessionLocal()
+    try:
+        db_interviews = db.query(MockInterviewDB).filter(MockInterviewDB.student_id == student.id).all()
+        if db_interviews:
+            db_latest = max(db_interviews, key=lambda x: x.created_at)
+            if not latest_attempt or db_latest.created_at > latest_attempt.created_at:
+                latest_attempt = db_latest
+    finally:
+        db.close()
+
     coding_history = [
         attempt
         for attempt in coding_attempts
@@ -1383,18 +1554,16 @@ def require_admin(authorization: str | None) -> None:
 
 def require_student(authorization: str | None) -> Student:
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Student login is required.",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Student login is required.")
+    
     token = authorization.removeprefix("Bearer ").strip()
     student_id = student_tokens.get(token)
-    student = next((item for item in students if item.id == student_id), None)
+    if not student_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired. Please login again.")
+    
+    student = find_student_by_id(student_id)
     if student is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Student login is required.",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Student profile not found.")
     return student
 
 
@@ -1403,7 +1572,9 @@ def optional_student(authorization: str | None) -> Student | None:
         return None
     token = authorization.removeprefix("Bearer ").strip()
     student_id = student_tokens.get(token)
-    return next((item for item in students if item.id == student_id), None)
+    if not student_id:
+        return None
+    return find_student_by_id(student_id)
 
 
 @app.get("/health")
@@ -1474,7 +1645,6 @@ async def upload_admin_asset(
     stored_name = f"{safe_entity}-{uuid4().hex}{suffix}"
     stored_path = UPLOADS_DIR / stored_name
     stored_path.write_bytes(content)
-
     original_name = Path(file.filename or stored_name).name
     return {
         "filename": original_name,
@@ -1483,50 +1653,66 @@ async def upload_admin_asset(
 
 
 @app.post("/api/students/register")
-def student_register(payload: StudentRegister) -> dict[str, object]:
-    if find_student_by_email(payload.email):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already registered.")
-    if len(payload.password) < 6:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 6 characters.")
-    student = Student(
-        id=max((item.id for item in students), default=0) + 1,
-        name=payload.name,
-        email=payload.email,
-        password_hash=hash_password(payload.password),
-        phone=payload.phone,
-        college=payload.college,
-        course=payload.course,
-        graduation_year=payload.graduation_year,
-        skills=payload.skills,
-        created_at=datetime.now(),
-    )
-    students.append(student)
-    student_resumes[student.id] = StudentResume(
-        student_id=student.id,
-        name=student.name,
-        email=student.email,
-        phone=student.phone,
-        skills=", ".join(student.skills),
-        updated_at=datetime.now(),
-    )
-    token = f"student-{uuid4()}"
-    student_tokens[token] = student.id
-    return {"token": token, "student": public_student(student)}
+def register_student(payload: StudentRegister) -> dict[str, object]:
+    print(f"DEBUG: Registering student: {payload.email}")
+    try:
+        if find_student_by_email(payload.email):
+            print(f"DEBUG: Email {payload.email} already registered.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered.")
+    except Exception as e:
+        print(f"DEBUG: find_student_by_email failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    
+    db = SessionLocal()
+    try:
+        new_student = StudentDB(
+            name=payload.name,
+            email=payload.email,
+            password_hash=hash_password(payload.password),
+            phone=payload.phone,
+            college=payload.college,
+            course=payload.course,
+            graduation_year=payload.graduation_year,
+            skills=payload.skills
+        )
+        db.add(new_student)
+        db.commit()
+        db.refresh(new_student)
+        
+        token = f"st-{uuid4()}"
+        student_tokens[token] = new_student.id
+        return {"token": token, "student": {
+            "id": new_student.id,
+            "name": new_student.name,
+            "email": new_student.email,
+            "skills": new_student.skills
+        }}
+    finally:
+        db.close()
 
 
 @app.post("/api/students/login")
 def student_login(payload: StudentLogin) -> dict[str, object]:
-    student = find_student_by_email(payload.email)
-    if student is None or student.password_hash != hash_password(payload.password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid student credentials.")
-    token = f"student-{uuid4()}"
-    student_tokens[token] = student.id
-    return {"token": token, "student": public_student(student)}
+    db = SessionLocal()
+    try:
+        student = db.query(StudentDB).filter(StudentDB.email == payload.email).first()
+        if student is None or student.password_hash != hash_password(payload.password):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid student credentials.")
+        token = f"st-{uuid4()}"
+        student_tokens[token] = student.id
+        return {"token": token, "student": {
+            "id": student.id,
+            "name": student.name,
+            "email": student.email,
+            "skills": student.skills
+        }}
+    finally:
+        db.close()
 
 
 @app.get("/api/students/me")
 def student_me(authorization: str | None = Header(default=None)) -> StudentPublic:
-    return public_student(require_student(authorization))
+    return require_student(authorization)
 
 
 @app.get("/api/students/dashboard")
@@ -1552,7 +1738,7 @@ def student_dashboard(authorization: str | None = Header(default=None)) -> dict[
     ]
     latest_coding = coding_history[0] if coding_history else None
     return {
-        "student": public_student(student),
+        "student": student,
         "resume_completion": resume_completion(student.id),
         "applied_jobs": len(applications),
         "latest_mock_score": latest_attempt.score if latest_attempt else None,
@@ -1611,7 +1797,28 @@ def apply_resume_patch(payload: ResumePatchRequest, authorization: str | None = 
 
 @app.get("/api/jobs")
 def list_jobs() -> list[Job]:
-    return sorted(jobs, key=lambda job: job.last_date)
+    db = SessionLocal()
+    try:
+        db_jobs = db.query(JobDB).all()
+        return [
+            Job(
+                id=j.id,
+                title=j.title,
+                company=j.company,
+                location=j.location,
+                job_type=j.job_type,
+                skills=j.skills,
+                description=j.description,
+                eligibility=j.eligibility,
+                compensation=j.compensation,
+                last_date=j.last_date,
+                apply_link=j.apply_link,
+                attachment_name=j.attachment_name,
+                attachment_url=j.attachment_url,
+            ) for j in db_jobs
+        ]
+    finally:
+        db.close()
 
 
 @app.post("/api/jobs/{job_id}/ai-resume-check")
@@ -1633,109 +1840,189 @@ def apply_to_job(
     student = require_student(authorization)
     find_job(job_id)
     payload = payload or JobApplyRequest()
-    existing = next(
-        (
-            application
-            for application in job_applications
-            if application.job_id == job_id and application.student_id == student.id
-        ),
-        None,
-    )
-    if existing:
-        updated_existing = existing.model_copy(
-            update={
-                "ats_score": payload.ats_score if payload.ats_score is not None else existing.ats_score,
-                "matched_keywords": payload.matched_keywords or existing.matched_keywords,
-                "missing_keywords": payload.missing_keywords or existing.missing_keywords,
-                "ai_suggestions": payload.ai_suggestions or existing.ai_suggestions,
-                "applied_with_ai_fix": payload.applied_with_ai_fix or existing.applied_with_ai_fix,
-                "updated_at": datetime.now(),
+    
+    db = SessionLocal()
+    try:
+        existing = db.query(ApplicationDB).filter(
+            ApplicationDB.job_id == job_id, 
+            ApplicationDB.student_id == student.id
+        ).first()
+        
+        if existing:
+            existing.ats_score = payload.ats_score if payload.ats_score is not None else existing.ats_score
+            existing.matched_keywords = payload.matched_keywords or existing.matched_keywords
+            existing.missing_keywords = payload.missing_keywords or existing.missing_keywords
+            existing.ai_suggestions = payload.ai_suggestions or existing.ai_suggestions
+            existing.applied_with_ai_fix = payload.applied_with_ai_fix or existing.applied_with_ai_fix
+            existing.updated_at = datetime.now()
+            db.commit()
+            db.refresh(existing)
+            return {
+                "application_id": existing.id,
+                "status": existing.status,
+                "applied_at": existing.applied_at
             }
+            
+        new_app = ApplicationDB(
+            student_id=student.id,
+            job_id=job_id,
+            status="applied",
+            ats_score=payload.ats_score,
+            matched_keywords=payload.matched_keywords,
+            missing_keywords=payload.missing_keywords,
+            ai_suggestions=payload.ai_suggestions,
+            applied_with_ai_fix=payload.applied_with_ai_fix
         )
-        job_applications[job_applications.index(existing)] = updated_existing
-        return application_summary(updated_existing)
-    application = JobApplication(
-        id=max((item.id for item in job_applications), default=0) + 1,
-        student_id=student.id,
-        job_id=job_id,
-        status="applied",
-        ats_score=payload.ats_score,
-        matched_keywords=payload.matched_keywords,
-        missing_keywords=payload.missing_keywords,
-        ai_suggestions=payload.ai_suggestions,
-        applied_with_ai_fix=payload.applied_with_ai_fix,
-        applied_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-    job_applications.append(application)
-    return application_summary(application)
+        db.add(new_app)
+        db.commit()
+        db.refresh(new_app)
+        return {
+            "application_id": new_app.id,
+            "status": new_app.status,
+            "applied_at": new_app.applied_at
+        }
+    finally:
+        db.close()
 
 
 @app.get("/api/students/applications")
 def student_applications(authorization: str | None = Header(default=None)) -> list[dict[str, object]]:
     student = require_student(authorization)
-    return [
-        application_summary(application)
-        for application in job_applications
-        if application.student_id == student.id
-    ]
+    db = SessionLocal()
+    try:
+        apps = db.query(ApplicationDB).filter(ApplicationDB.student_id == student.id).all()
+        return [
+            {
+                "application_id": a.id,
+                "status": a.status,
+                "applied_at": a.applied_at
+            } for a in apps
+        ]
+    finally:
+        db.close()
 
 
 @app.post("/api/jobs", status_code=status.HTTP_201_CREATED)
 def create_job(payload: JobBase, authorization: str | None = Header(default=None)) -> Job:
     require_admin(authorization)
-    job = Job(id=(max((item.id for item in jobs), default=0) + 1), **payload.model_dump())
-    jobs.append(job)
-    return job
+    db = SessionLocal()
+    try:
+        new_job = JobDB(
+            title=payload.title,
+            company=payload.company,
+            location=payload.location,
+            job_type=payload.job_type,
+            skills=payload.skills,
+            description=payload.description,
+            eligibility=payload.eligibility,
+            compensation=payload.compensation,
+            last_date=datetime.combine(payload.last_date, datetime.min.time()),
+            apply_link=str(payload.apply_link),
+            attachment_name=payload.attachment_name,
+            attachment_url=payload.attachment_url
+        )
+        db.add(new_job)
+        db.commit()
+        db.refresh(new_job)
+        return Job(
+            id=new_job.id,
+            **payload.model_dump()
+        )
+    finally:
+        db.close()
 
 
 @app.patch("/api/jobs/{job_id}")
 def update_job(job_id: int, payload: JobBase, authorization: str | None = Header(default=None)) -> Job:
     require_admin(authorization)
-    for index, job in enumerate(jobs):
-        if job.id == job_id:
-            updated = Job(id=job.id, **payload.model_dump())
-            jobs[index] = updated
-            return updated
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    db = SessionLocal()
+    try:
+        job = db.query(JobDB).filter(JobDB.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+        
+        job.title = payload.title
+        job.company = payload.company
+        job.location = payload.location
+        job.job_type = payload.job_type
+        job.skills = payload.skills
+        job.description = payload.description
+        job.eligibility = payload.eligibility
+        job.compensation = payload.compensation
+        job.last_date = datetime.combine(payload.last_date, datetime.min.time())
+        job.apply_link = str(payload.apply_link)
+        job.attachment_name = payload.attachment_name
+        job.attachment_url = payload.attachment_url
+        
+        db.commit()
+        return Job(id=job.id, **payload.model_dump())
+    finally:
+        db.close()
 
 
 @app.delete("/api/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_job(job_id: int, authorization: str | None = Header(default=None)) -> None:
     require_admin(authorization)
-    for index, job in enumerate(jobs):
-        if job.id == job_id:
-            jobs.pop(index)
-            return
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    db = SessionLocal()
+    try:
+        job = db.query(JobDB).filter(JobDB.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+        db.delete(job)
+        db.commit()
+        return
+    finally:
+        db.close()
 
 
 @app.get("/api/admin/dashboard")
 def admin_dashboard(authorization: str | None = Header(default=None)) -> dict[str, object]:
     require_admin(authorization)
-    submitted_coding_attempts = [attempt for attempt in coding_attempts if attempt.status == "submitted"]
-    return {
-        "total_students": len(students),
-        "total_jobs": len(jobs),
-        "total_applications": len(job_applications),
-        "total_events": len(events),
-        "total_coding_attempts": len(submitted_coding_attempts),
-        "average_mock_score": round(sum(attempt.score for attempt in mock_attempts) / len(mock_attempts), 1)
-        if mock_attempts
-        else None,
-        "average_coding_score": round(
-            sum(attempt.total_score for attempt in submitted_coding_attempts) / len(submitted_coding_attempts),
-            1,
-        )
-        if submitted_coding_attempts
-        else None,
-    }
+    db = SessionLocal()
+    try:
+        total_students = db.query(StudentDB).count()
+        total_jobs = db.query(JobDB).count()
+        total_applications = db.query(ApplicationDB).count()
+        total_events = db.query(EventDB).count()
+        
+        # Mock scores
+        mock_scores = [m.score for m in db.query(MockInterviewDB.score).all()]
+        avg_mock = round(sum(mock_scores) / len(mock_scores), 1) if mock_scores else None
+        
+        return {
+            "total_students": total_students,
+            "total_jobs": total_jobs,
+            "total_applications": total_applications,
+            "total_events": total_events,
+            "average_mock_score": avg_mock,
+            "total_coding_attempts": 0, # Legacy/Placeholder
+            "average_coding_score": None
+        }
+    finally:
+        db.close()
 
 
 @app.get("/api/admin/students")
 def admin_students(authorization: str | None = Header(default=None)) -> list[StudentPublic]:
     require_admin(authorization)
-    return [public_student(student) for student in students]
+    db = SessionLocal()
+    try:
+        db_students = db.query(StudentDB).all()
+        return [
+            StudentPublic(
+                id=s.id,
+                name=s.name,
+                email=s.email,
+                phone=s.phone or "",
+                college=s.college or "",
+                course=s.course or "",
+                graduation_year=s.graduation_year or "",
+                skills=s.skills or [],
+                created_at=s.created_at
+            ) for s in db_students
+        ]
+    finally:
+        db.close()
 
 
 @app.get("/api/admin/students/{student_id}")
@@ -1765,28 +2052,42 @@ def admin_student_detail(student_id: int, authorization: str | None = Header(def
 @app.get("/api/admin/jobs")
 def admin_jobs(authorization: str | None = Header(default=None)) -> list[dict[str, object]]:
     require_admin(authorization)
-    result = []
-    for job in jobs:
-        related = [application for application in job_applications if application.job_id == job.id]
-        status_counts = {
-            key: sum(1 for application in related if application.status == key)
-            for key in [
-                "applied",
-                "under_review",
-                "shortlisted",
-                "interview_scheduled",
-                "selected",
-                "rejected",
-            ]
-        }
-        result.append(
-            {
-                **job.model_dump(),
-                "total_applicants": len(related),
+    db = SessionLocal()
+    try:
+        db_jobs = db.query(JobDB).all()
+        result = []
+        for job in db_jobs:
+            # Count applications
+            related_count = db.query(ApplicationDB).filter(ApplicationDB.job_id == job.id).count()
+            
+            # Group by status
+            status_counts = {}
+            for status_key in ["applied", "under_review", "shortlisted", "interview_scheduled", "selected", "rejected"]:
+                status_counts[status_key] = db.query(ApplicationDB).filter(
+                    ApplicationDB.job_id == job.id, 
+                    ApplicationDB.status == status_key
+                ).count()
+            
+            result.append({
+                "id": job.id,
+                "title": job.title,
+                "company": job.company,
+                "location": job.location,
+                "job_type": job.job_type,
+                "skills": job.skills,
+                "description": job.description,
+                "eligibility": job.eligibility,
+                "compensation": job.compensation,
+                "last_date": job.last_date,
+                "apply_link": job.apply_link,
+                "attachment_name": job.attachment_name,
+                "attachment_url": job.attachment_url,
+                "total_applicants": related_count,
                 "status_counts": status_counts,
-            }
-        )
-    return result
+            })
+        return result
+    finally:
+        db.close()
 
 
 @app.get("/api/admin/events")
@@ -1798,12 +2099,36 @@ def admin_events(authorization: str | None = Header(default=None)) -> list[Event
 @app.get("/api/admin/jobs/{job_id}/applications")
 def admin_job_applications(job_id: int, authorization: str | None = Header(default=None)) -> list[dict[str, object]]:
     require_admin(authorization)
-    find_job(job_id)
-    return [
-        admin_application_detail(application)
-        for application in job_applications
-        if application.job_id == job_id
-    ]
+    db = SessionLocal()
+    try:
+        db_apps = db.query(ApplicationDB).filter(ApplicationDB.job_id == job_id).all()
+        return [
+            admin_application_detail_from_db(a)
+            for a in db_apps
+        ]
+    finally:
+        db.close()
+
+def admin_application_detail_from_db(a: ApplicationDB) -> dict[str, object]:
+    student = find_student_by_id(a.student_id)
+    return {
+        "application_id": a.id,
+        "status": a.status,
+        "admin_note": a.admin_note or "",
+        "ats_score": a.ats_score,
+        "matched_keywords": a.matched_keywords or [],
+        "missing_keywords": a.missing_keywords or [],
+        "ai_suggestions": a.ai_suggestions or [],
+        "applied_with_ai_fix": a.applied_with_ai_fix,
+        "resume_completion": 0, # Legacy
+        "latest_mock_score": None, # Should fetch from MockInterviewDB
+        "student": {
+            "name": student.name if student else "Unknown",
+            "email": student.email if student else "N/A",
+            "phone": student.phone if student else "",
+            "skills": student.skills if student else [],
+        }
+    }
 
 
 @app.get("/api/admin/jobs/{job_id}/applicants-export")
@@ -1900,19 +2225,21 @@ def update_application(
     authorization: str | None = Header(default=None),
 ) -> dict[str, object]:
     require_admin(authorization)
-    application = next((item for item in job_applications if item.id == application_id), None)
-    if application is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
-    updated = application.model_copy(
-        update={
-            "status": payload.status,
-            "admin_note": payload.admin_note,
-            "updated_at": datetime.now(),
-        }
-    )
-    index = job_applications.index(application)
-    job_applications[index] = updated
-    return admin_application_detail(updated)
+    db = SessionLocal()
+    try:
+        application = db.query(ApplicationDB).filter(ApplicationDB.id == application_id).first()
+        if application is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
+        
+        application.status = payload.status
+        application.admin_note = payload.admin_note
+        application.updated_at = datetime.now()
+        
+        db.commit()
+        db.refresh(application)
+        return admin_application_detail_from_db(application)
+    finally:
+        db.close()
 
 
 @app.get("/api/events")
@@ -2114,6 +2441,51 @@ def call_ollama(prompt: str) -> str | None:
     return answer or None
 
 
+def call_gemini(prompt: str) -> str | None:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("DEBUG: No GEMINI_API_KEY found in environment.")
+        return None
+    
+    print(f"DEBUG: Using API Key starting with: {api_key[:4]}...")
+    
+    # Try both v1 (stable) and v1beta (newer features)
+    versions = ["v1", "v1beta"]
+    models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3-flash-preview", "gemini-flash-latest"]
+    
+    for version in versions:
+        for model_name in models:
+            endpoint = f"https://generativelanguage.googleapis.com/{version}/models/{model_name}:generateContent?key={api_key}"
+            body = json.dumps({
+                "contents": [{
+                    "parts": [{"text": prompt}]
+                }]
+            }).encode("utf-8")
+
+            try:
+                api_request = request.Request(
+                    endpoint,
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with request.urlopen(api_request, timeout=30) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                    result = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    print(f"DEBUG: Gemini ({version}/{model_name}) successful.")
+                    return result
+            except Exception as e:
+                # If it's a 404, we try the next combination.
+                # If it's a timeout, we also try the next model just in case it's a model-specific lag.
+                if "404" in str(e) or "timed out" in str(e).lower():
+                    print(f"DEBUG: Gemini ({version}/{model_name}) failed ({str(e)}), trying next combination...")
+                    continue
+                
+                print(f"DEBUG: Gemini ({version}/{model_name}) terminal error: {str(e)}")
+                return None
+    return None
+
+
 def fallback_interview_question(role: str, round_type: str, skills: list[str], turn: int, difficulty: str = "intermediate") -> str:
     primary = skills[(turn - 1) % len(skills)]
     if difficulty == "beginner":
@@ -2123,19 +2495,19 @@ def fallback_interview_question(role: str, round_type: str, skills: list[str], t
     else:
         depth = "cover the project, your decision, and the result"
     questions = [
-        f"Walk me through one real project where you used {primary}. Please {depth}.",
-        f"I am going to push deeper on {primary}. What was the hardest technical decision you made and why?",
-        f"Imagine this project breaks in production. How would you debug it step by step?",
-        f"For a {role} role, how would you explain your impact to a non-technical manager?",
-        "Tell me about one weakness in your current preparation and what you are doing to improve it.",
+        f"Explain a specific technical challenge you faced while using {primary}. What were the constraints and how did you overcome them?",
+        f"Regarding {primary}, walk me through a decision where you had to choose between two competing approaches. What were the tradeoffs?",
+        f"If you had to scale a system using {primary} to 10x its current load, what would be the first bottleneck you'll hit?",
+        f"Tell me about a time {primary} behaved unexpectedly. How did you diagnose the root cause?",
+        f"How do you ensure the code you write with {primary} is both maintainable and performant?",
     ]
     if round_type == "hr":
         questions = [
-            "Tell me about yourself like this is the first two minutes of a real interview.",
-            "Describe a time you handled pressure or a deadline. What did you do first?",
-            f"Why are you interested in a {role} role, and what makes you ready for it?",
-            "Tell me about a disagreement in a team. How did you handle it?",
-            "What should I remember about you after this interview?",
+            "Tell me about a high-pressure situation where you had to make a critical decision with limited information.",
+            f"Why are you specifically interested in the {role} role at this stage of your career?",
+            "Describe a situation where you had to influence a teammate who had a completely different technical opinion than yours.",
+            "What is the most significant piece of constructive feedback you've received, and how did you act on it?",
+            "If we hire you, what is the first thing you would want to improve or change in our current workflow?",
         ]
     return questions[min(turn - 1, len(questions) - 1)]
 
@@ -2150,18 +2522,44 @@ def generate_interview_question(session: dict[str, object], turn: int, last_answ
     transcript_text = "\n".join(
         f"{item['speaker']}: {item['text']}" for item in transcript[-8:]
     ) if isinstance(transcript, list) else ""
+    persona = str(session.get("persona", "friendly_recruiter"))
+    resume = str(session.get("resume_text", ""))
+    
+    persona_instructions = {
+        "technical_expert": "You are a Senior Architect. Be precise, focus on implementation details, and push for architectural tradeoffs.",
+        "friendly_recruiter": "You are a warm, encouraging recruiter. Focus on cultural fit and high-level project impact.",
+        "tough_manager": "You are a direct, no-nonsense hiring manager. Be critical of weak answers and ask about results and metrics."
+    }
+
     prompt = (
-        "You are a calm but realistic human interviewer. Ask exactly one concise interview question. "
-        "Do not add explanation, scoring, markdown, or multiple questions.\n"
+        f"SYSTEM: {persona_instructions.get(persona, '')}\n"
+        "TASK: Ask exactly one concise, high-impact interview question. ABSOLUTELY NO GENERIC QUESTIONS.\n"
+        "CLARITY RULE: Use clear, simple, and professional English. Avoid complex jargon unless it is a specific technical term for the role. Keep sentences direct.\n"
+        "CRITICAL RULES:\n"
+        "1. If the candidate's latest answer was shallow, generic, or lacked technical depth, you MUST aggressively grill them on that specific point.\n"
+        "2. Look for numbers, technologies, and specific implementation steps. If missing, ask 'How exactly did you...' or 'What were the specific metrics...'.\n"
+        "3. Do not move to a new topic if the previous answer was poor.\n"
         f"Role: {role}\nRound: {round_type}\nSkills: {skills_text}\nTurn: {turn}/5\n"
         f"Difficulty: {difficulty}\n"
+        f"Candidate Resume Context: {resume[:1000] if resume else 'No resume provided.'}\n"
         f"Latest candidate answer: {last_answer or 'No answer yet'}\n"
         f"Recent transcript:\n{transcript_text}\n"
-        "Ask a natural follow-up if the answer needs depth; otherwise move to the next useful question."
+        "STRICT INSTRUCTION: Your question must be so specific that a generic candidate could not answer it."
     )
+    
+    print(f"DEBUG: Generating question for turn {turn} using persona {persona}")
+    question = call_gemini(prompt)
+    if question:
+        print("DEBUG: Using GEMINI for question")
+        return question, "gemini"
+    
+    print("DEBUG: Gemini failed, trying OLLAMA")
     question = call_ollama(prompt)
     if question:
+        print("DEBUG: Using OLLAMA for question")
         return question, "ollama"
+    
+    print("DEBUG: AI failed, using FALLBACK")
     skills_list = skills if isinstance(skills, list) else [str(skills)]
     return fallback_interview_question(role, round_type, skills_list, turn, difficulty), "fallback"
 
@@ -2172,24 +2570,25 @@ def fallback_interview_feedback(session: dict[str, object]) -> dict[str, object]
     combined = " ".join(str(answer) for answer in answers)
     word_count = len(combined.split())
     matched_skills = [skill for skill in skills if str(skill).lower() in combined.lower()]
-    score = min(10, max(4, word_count // 35 + len(matched_skills) + 3))
+    score = min(10, max(3, word_count // 40 + len(matched_skills) + 2))
+    
+    strength = "You demonstrated a baseline understanding of the required skills."
+    if word_count > 120:
+        strength = "You provided detailed responses and maintained a good conversational flow."
+    elif len(matched_skills) >= 2:
+        strength = "You successfully integrated key technical keywords into your answers."
+
     suggestions = [
-        "Answer with a sharper opening line before giving background.",
-        "Add one measurable result, scale, or business impact from your project.",
-        "Use the STAR structure when the question is behavioral: situation, task, action, result.",
+        "Be more specific: Use the STAR method (Situation, Task, Action, Result).",
+        "Add measurable impact: Include numbers, percentages, or scale in your results.",
+        "Technical depth: Explain the 'why' behind your technical choices.",
     ]
-    if len(matched_skills) < min(2, len(skills)):
-        suggestions.insert(0, "Connect your answer to the required skills more directly.")
+    
     return {
         "score": score,
-        "strength": "You stayed relevant and gave the interviewer enough material to continue."
-        if word_count > 80
-        else "You have the base of the answer, but it needs more specific evidence.",
-        "suggestions": suggestions[:4],
-        "sample_answer": (
-            "A stronger answer would name the project, state your exact responsibility, explain the hard "
-            "decision, and close with the result or what changed because of your work."
-        ),
+        "strength": strength,
+        "suggestions": suggestions,
+        "sample_answer": "A top-tier response should clearly define the problem, explain your specific technical action, and conclude with a measurable outcome or lesson learned."
     }
 
 
@@ -2226,7 +2625,7 @@ def generate_answer_coaching(question: str, answer: str, skills: list[str], role
         "missing as an array of 3 short answer-specific suggestions, better_answer as a compact improved answer.\n"
         f"Role: {role}\nDifficulty: {difficulty}\nSkills: {', '.join(skills)}\nQuestion: {question}\nCandidate answer: {answer}"
     )
-    raw = call_ollama(prompt)
+    raw = call_gemini(prompt) or call_ollama(prompt)
     if raw:
         try:
             match = re.search(r"\{[\s\S]*\}", raw)
@@ -2249,13 +2648,25 @@ def generate_interview_feedback(session: dict[str, object]) -> dict[str, object]
         f"{item['speaker']}: {item['text']}" for item in transcript
     ) if isinstance(transcript, list) else ""
     prompt = (
-        "Review this mock interview transcript. Return only valid JSON with keys: "
-        "score as an integer from 1 to 10, strength as one sentence, suggestions as an array of 4 short strings, "
-        "sample_answer as one compact paragraph.\n"
-        f"Role: {session['role']}\nRound: {session['round_type']}\nDifficulty: {session.get('difficulty', 'intermediate')}\nSkills: {', '.join(session['skills'])}\n"
-        f"Transcript:\n{transcript_text}"
+        "ACT AS: An elite, critical hiring manager at a top tech company.\n"
+        "TASK: Provide a high-precision, technical critique of the candidate's performance. DO NOT BE GENERIC.\n"
+        "EVALUATION REQUIREMENTS:\n"
+        "1. ANALYSIS: Look at the transcript and identify exactly which technical details were missed or which behavioral answers were weak.\n"
+        "2. WHAT'S WRONG: Be blunt. If they lacked metrics, say so. If their technical explanation was surface-level, name the specific concepts they ignored.\n"
+        "3. WHAT'S RIGHT: Highlight specific moments where they demonstrated mastery or good reasoning.\n"
+        "4. SCORE: Be stingy. 9+ is only for perfect, data-backed, STAR-formatted answers.\n"
+        "JSON STRUCTURE: {\n"
+        "  \"score\": int,\n"
+        "  \"strength\": \"One specific moment or technical detail they nailed\",\n"
+        "  \"suggestions\": [\"Specific technical concept to study\", \"Specific result they should have mentioned\", \"Structural fix for a specific answer\"],\n"
+        "  \"sample_answer\": \"A full, high-impact model answer for their weakest question.\"\n"
+        "}\n"
+        f"Role: {session['role']}\nRound: {session['round_type']}\nSkills: {', '.join(session['skills'])}\n"
+        f"Transcript:\n{transcript_text}\n"
     )
-    raw = call_ollama(prompt)
+    
+    print("DEBUG: Generating final feedback using Gemini")
+    raw = call_gemini(prompt) or call_ollama(prompt)
     if raw:
         try:
             match = re.search(r"\{[\s\S]*\}", raw)
@@ -2276,114 +2687,159 @@ def start_live_mock_interview(payload: InterviewRequest) -> dict[str, object]:
     skills = interview_skills(payload)
     if not skills:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Add at least one skill.")
+    
     session_id = f"interview-{uuid4()}"
-    session: dict[str, object] = {
+    session_data = {
         "id": session_id,
         "role": payload.role,
         "round_type": payload.round_type,
         "difficulty": payload.difficulty,
+        "persona": payload.persona,
+        "resume_text": payload.resume_text,
         "skills": skills,
         "turn": 1,
         "transcript": [],
         "answers": [],
-        "created_at": datetime.now(),
+        "created_at": datetime.now().isoformat(),
     }
-    question, provider = generate_interview_question(session, 1)
-    session["transcript"].append({"speaker": "Interviewer", "text": question})
-    interview_sessions[session_id] = session
+    
+    question, provider = generate_interview_question(session_data, 1)
+    session_data["transcript"].append({"speaker": "Interviewer", "text": question})
+    
+    # Save to DB
+    db = SessionLocal()
+    try:
+        new_session = ActiveInterviewSessionDB(session_id=session_id, data=session_data)
+        db.add(new_session)
+        db.commit()
+    except Exception as e:
+        print(f"DEBUG: Failed to save session to DB: {e}")
+    finally:
+        db.close()
+
     return {
         "session_id": session_id,
         "question": question,
         "turn": 1,
         "max_turns": 5,
         "provider": provider,
-        "message": "Local AI interviewer is live." if provider == "ollama" else "Fallback interviewer is live. Start Ollama for local AI depth.",
+        "message": f"Interview live with {provider.upper()} AI." if provider != "fallback" else "Fallback interviewer is live.",
     }
 
 
 @app.post("/api/mock-interview/respond")
 def respond_live_mock_interview(payload: InterviewSessionReply) -> dict[str, object]:
-    session = interview_sessions.get(payload.session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview session not found.")
-    answer = payload.answer.strip()
-    if not answer:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Speak or write an answer first.")
-    session["answers"].append(answer)
-    session["transcript"].append({"speaker": "Candidate", "text": answer})
-    current_turn = int(session["turn"])
-    questions = [
-        item["text"]
-        for item in session["transcript"]
-        if isinstance(item, dict) and item.get("speaker") == "Interviewer"
-    ]
-    current_question = str(questions[-1]) if questions else ""
-    skills = [str(skill) for skill in session["skills"]] if isinstance(session["skills"], list) else []
-    answer_coaching = generate_answer_coaching(current_question, answer, skills, str(session["role"]), str(session.get("difficulty", "intermediate")))
-    if current_turn >= 5:
+    db = SessionLocal()
+    try:
+        session_record = db.query(ActiveInterviewSessionDB).filter(ActiveInterviewSessionDB.session_id == payload.session_id).first()
+        if not session_record:
+            # Check in-memory as fallback
+            session = interview_sessions.get(payload.session_id)
+            if not session:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview session not found.")
+        else:
+            session = session_record.data
+
+        answer = payload.answer.strip()
+        if not answer:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Speak or write an answer first.")
+        
+        session["answers"].append(answer)
+        session["transcript"].append({"speaker": "Candidate", "text": answer})
+        current_turn = int(session["turn"])
+        
+        if current_turn >= 5:
+            # Update DB before returning
+            if session_record:
+                session_record.data = session
+                db.commit()
+            return {
+                "session_id": payload.session_id,
+                "is_complete": True,
+                "question": "",
+                "turn": current_turn,
+                "max_turns": 5,
+                "message": "Good. That completes this mock interview. End the session for your score.",
+            }
+
+        next_turn = current_turn + 1
+        question, provider = generate_interview_question(session, next_turn, answer)
+        session["turn"] = next_turn
+        session["transcript"].append({"speaker": "Interviewer", "text": question})
+        
+        # Save progress to DB
+        if session_record:
+            session_record.data = session
+            db.commit()
+        else:
+            interview_sessions[payload.session_id] = session
+
         return {
             "session_id": payload.session_id,
-            "is_complete": True,
-            "question": "",
-            "turn": current_turn,
+            "is_complete": False,
+            "question": question,
+            "turn": next_turn,
             "max_turns": 5,
-            "answer_coaching": answer_coaching,
-            "message": "Good. That completes this mock interview. End the session for your score.",
+            "provider": provider,
+            "message": "Follow-up ready.",
         }
-    next_turn = current_turn + 1
-    question, provider = generate_interview_question(session, next_turn, answer)
-    session["turn"] = next_turn
-    session["transcript"].append({"speaker": "Interviewer", "text": question})
-    return {
-        "session_id": payload.session_id,
-        "is_complete": False,
-        "question": question,
-        "turn": next_turn,
-        "max_turns": 5,
-        "provider": provider,
-        "answer_coaching": answer_coaching,
-        "message": "Follow-up ready.",
-    }
+    finally:
+        db.close()
 
 
 @app.post("/api/mock-interview/end")
 def end_live_mock_interview(payload: InterviewSessionReply, authorization: str | None = Header(default=None)) -> dict[str, object]:
-    session = interview_sessions.get(payload.session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview session not found.")
-    if payload.answer.strip():
-        session["answers"].append(payload.answer.strip())
-        session["transcript"].append({"speaker": "Candidate", "text": payload.answer.strip()})
-    feedback = generate_interview_feedback(session)
-    student = optional_student(authorization)
-    if student is not None:
-        questions = [
-            item["text"]
-            for item in session["transcript"]
-            if isinstance(item, dict) and item.get("speaker") == "Interviewer"
-        ]
-        answers = session["answers"] if isinstance(session["answers"], list) else []
-        mock_attempts.append(
-            MockInterviewAttempt(
-                id=max((attempt.id for attempt in mock_attempts), default=0) + 1,
+    student = require_student(authorization)
+    db = SessionLocal()
+    try:
+        session_record = db.query(ActiveInterviewSessionDB).filter(ActiveInterviewSessionDB.session_id == payload.session_id).first()
+        if not session_record:
+            session = interview_sessions.get(payload.session_id)
+            if not session:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview session not found.")
+        else:
+            session = session_record.data
+
+        if payload.answer.strip():
+            session["answers"].append(payload.answer.strip())
+            session["transcript"].append({"speaker": "Candidate", "text": payload.answer.strip()})
+        
+        feedback = generate_interview_feedback(session)
+        
+        # Move to Permanent DB if student is logged in
+        if student:
+            questions = [
+                item["text"] for item in session["transcript"] 
+                if isinstance(item, dict) and item.get("speaker") == "Interviewer"
+            ]
+            answers = session["answers"]
+            
+            new_record = MockInterviewDB(
                 student_id=student.id,
                 role=str(session["role"]),
                 round_type=str(session["round_type"]),
-                skills=[str(skill) for skill in session["skills"]],
-                question="\n".join(str(question) for question in questions),
-                answer="\n\n".join(str(answer) for answer in answers),
+                skills=session["skills"],
+                question_transcript="\n---\n".join(str(q) for q in questions),
+                answer_transcript="\n---\n".join(str(a) for a in answers),
                 score=int(feedback["score"]),
                 strength=str(feedback["strength"]),
-                suggestions=[str(item) for item in feedback["suggestions"]],
-                sample_answer=str(feedback["sample_answer"]),
-                created_at=datetime.now(),
+                suggestions=feedback["suggestions"],
+                sample_answer=str(feedback["sample_answer"])
             )
-        )
-    interview_sessions.pop(payload.session_id, None)
-    return {
-        **feedback,
-        "saved": student is not None,
-    }
+            db.add(new_record)
+            
+            # Clean up active session
+            if session_record:
+                db.delete(session_record)
+            db.commit()
+        
+        interview_sessions.pop(payload.session_id, None)
+        return {
+            **feedback,
+            "saved": student is not None,
+        }
+    finally:
+        db.close()
 
 
 @app.post("/api/mock-interview/feedback")
