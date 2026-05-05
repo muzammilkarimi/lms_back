@@ -148,6 +148,23 @@ class ActiveInterviewSessionDB(Base):
     data = Column(JSON) # Stores the turn, transcript, etc.
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
+class ResumeDB(Base):
+    __tablename__ = "resumes"
+    student_id = Column(Integer, ForeignKey("students.id"), primary_key=True)
+    name = Column(String(255))
+    role = Column(String(255))
+    email = Column(String(255))
+    phone = Column(String(50))
+    links = Column(Text)
+    summary = Column(Text)
+    education = Column(Text)
+    skills = Column(Text)
+    projects = Column(Text)
+    experience = Column(Text)
+    achievements = Column(Text)
+    certifications = Column(Text)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
 # Create tables
 try:
     Base.metadata.create_all(bind=engine)
@@ -759,7 +776,7 @@ students: list[Student] = []
 
 student_tokens: dict[str, int] = {}
 
-student_resumes: dict[int, StudentResume] = {}
+# student_resumes: dict[int, StudentResume] = {} # Removed in-memory store
 
 job_applications: list[JobApplication] = []
 
@@ -1348,12 +1365,20 @@ def evaluate_coding_submission(question: CodingQuestion, code: str, language: Co
 
 
 def resume_completion(student_id: int) -> int:
-    resume = student_resumes.get(student_id)
-    if resume is None:
-        return 0
-    values = resume.model_dump(exclude={"student_id", "updated_at"}).values()
-    filled = sum(1 for value in values if str(value).strip())
-    return round((filled / 12) * 100)
+    db = SessionLocal()
+    try:
+        resume = db.query(ResumeDB).filter(ResumeDB.student_id == student_id).first()
+        if resume is None:
+            return 0
+        values = [
+            resume.name, resume.role, resume.email, resume.phone,
+            resume.links, resume.summary, resume.education, resume.skills,
+            resume.projects, resume.experience, resume.achievements, resume.certifications
+        ]
+        filled = sum(1 for value in values if str(value).strip())
+        return round((filled / 12) * 100)
+    finally:
+        db.close()
 
 
 def resume_text(resume: StudentResume) -> str:
@@ -1738,81 +1763,175 @@ def student_me(authorization: str | None = Header(default=None)) -> StudentPubli
 @app.get("/api/students/dashboard")
 def student_dashboard(authorization: str | None = Header(default=None)) -> dict[str, object]:
     student = require_student(authorization)
-    applications = [application for application in job_applications if application.student_id == student.id]
-    latest_attempt = next(
-        (
-            attempt
-            for attempt in sorted(mock_attempts, key=lambda item: item.created_at, reverse=True)
-            if attempt.student_id == student.id
-        ),
-        None,
-    )
-    coding_history = [
-        attempt
-        for attempt in sorted(
-            coding_attempts,
-            key=lambda item: item.submitted_at or item.started_at,
-            reverse=True,
-        )
-        if attempt.student_id == student.id and attempt.status == "submitted"
-    ]
-    latest_coding = coding_history[0] if coding_history else None
-    return {
-        "student": student,
-        "resume_completion": resume_completion(student.id),
-        "applied_jobs": len(applications),
-        "latest_mock_score": latest_attempt.score if latest_attempt else None,
-        "latest_coding_score": latest_coding.total_score if latest_coding else None,
-        "applications": [application_summary(application) for application in applications],
-        "mock_attempts": [attempt for attempt in mock_attempts if attempt.student_id == student.id],
-        "coding_attempts": [coding_attempt_summary(attempt) for attempt in coding_history[:6]],
-    }
+    db = SessionLocal()
+    try:
+        applications = db.query(ApplicationDB).filter(ApplicationDB.student_id == student.id).all()
+        
+        latest_attempt = db.query(MockInterviewDB).filter(MockInterviewDB.student_id == student.id).order_by(MockInterviewDB.created_at.desc()).first()
+        
+        coding_history = db.query(CodingAttemptDB).filter(
+            CodingAttemptDB.student_id == student.id,
+            CodingAttemptDB.status == "submitted"
+        ).order_by(CodingAttemptDB.submitted_at.desc()).all()
+        
+        latest_coding = coding_history[0] if coding_history else None
+        
+        resume_record = db.query(ResumeDB).filter(ResumeDB.student_id == student.id).first()
+        resume_data = None
+        if resume_record:
+            resume_data = {
+                "id": resume_record.student_id,
+                "name": resume_record.name,
+                "role": resume_record.role,
+                "summary": resume_record.summary,
+                "skills": resume_record.skills,
+                "updated_at": resume_record.updated_at
+            }
+
+        return {
+            "student": public_student(student),
+            "resume": resume_data,
+            "resume_completion": resume_completion(student.id),
+            "applied_jobs": len(applications),
+            "latest_mock_score": latest_attempt.score if latest_attempt else None,
+            "latest_coding_score": latest_coding.total_score if latest_coding else None,
+            "applications": [application_summary(application) for application in applications],
+            "mock_attempts": db.query(MockInterviewDB).filter(MockInterviewDB.student_id == student.id).all(),
+            "coding_attempts": [coding_attempt_summary(attempt) for attempt in coding_history[:6]],
+        }
+    finally:
+        db.close()
 
 
 @app.get("/api/students/resume")
 def get_student_resume(authorization: str | None = Header(default=None)) -> StudentResume:
     student = require_student(authorization)
-    return student_resumes.setdefault(
-        student.id,
-        StudentResume(
-            student_id=student.id,
-            name=student.name,
-            email=student.email,
-            phone=student.phone,
-            skills=", ".join(student.skills),
-            updated_at=datetime.now(),
-        ),
-    )
-
+    db = SessionLocal()
+    try:
+        resume_record = db.query(ResumeDB).filter(ResumeDB.student_id == student.id).first()
+        if not resume_record:
+            resume_record = ResumeDB(
+                student_id=student.id,
+                name=student.name,
+                email=student.email,
+                phone=student.phone or "",
+                role="", links="", summary="", education="", skills=", ".join(student.skills), projects="", experience="", achievements="", certifications=""
+            )
+            db.add(resume_record)
+            db.commit()
+            db.refresh(resume_record)
+        
+        return StudentResume(
+            student_id=resume_record.student_id,
+            name=resume_record.name or "",
+            role=resume_record.role or "",
+            email=resume_record.email or "",
+            phone=resume_record.phone or "",
+            links=resume_record.links or "",
+            summary=resume_record.summary or "",
+            education=resume_record.education or "",
+            skills=resume_record.skills or "",
+            projects=resume_record.projects or "",
+            experience=resume_record.experience or "",
+            achievements=resume_record.achievements or "",
+            certifications=resume_record.certifications or "",
+            updated_at=resume_record.updated_at
+        )
+    finally:
+        db.close()
 
 @app.put("/api/students/resume")
 def save_student_resume(payload: StudentResume, authorization: str | None = Header(default=None)) -> StudentResume:
     student = require_student(authorization)
-    resume = payload.model_copy(update={"student_id": student.id, "updated_at": datetime.now()})
-    student_resumes[student.id] = resume
-    return resume
+    db = SessionLocal()
+    try:
+        resume_record = db.query(ResumeDB).filter(ResumeDB.student_id == student.id).first()
+        update_data = payload.model_dump(exclude={"student_id", "updated_at"})
+        
+        if resume_record:
+            for key, value in update_data.items():
+                setattr(resume_record, key, value)
+            resume_record.updated_at = datetime.now()
+        else:
+            resume_record = ResumeDB(
+                student_id=student.id,
+                updated_at=datetime.now(),
+                **update_data
+            )
+            db.add(resume_record)
+        
+        db.commit()
+        db.refresh(resume_record)
+        
+        return StudentResume(
+            student_id=resume_record.student_id,
+            name=resume_record.name or "",
+            role=resume_record.role or "",
+            email=resume_record.email or "",
+            phone=resume_record.phone or "",
+            links=resume_record.links or "",
+            summary=resume_record.summary or "",
+            education=resume_record.education or "",
+            skills=resume_record.skills or "",
+            projects=resume_record.projects or "",
+            experience=resume_record.experience or "",
+            achievements=resume_record.achievements or "",
+            certifications=resume_record.certifications or "",
+            updated_at=resume_record.updated_at
+        )
+    finally:
+        db.close()
 
 
 @app.post("/api/students/resume/apply-ai-patch")
 def apply_resume_patch(payload: ResumePatchRequest, authorization: str | None = Header(default=None)) -> StudentResume:
     student = require_student(authorization)
-    resume = student_resumes.setdefault(
-        student.id,
-        StudentResume(student_id=student.id, name=student.name, email=student.email, phone=student.phone),
-    )
-    allowed_fields = {
-        "role",
-        "summary",
-        "skills",
-        "projects",
-        "experience",
-        "achievements",
-        "certifications",
-    }
-    updates = {key: value for key, value in payload.patch.items() if key in allowed_fields and isinstance(value, str)}
-    updated = resume.model_copy(update={**updates, "updated_at": datetime.now()})
-    student_resumes[student.id] = updated
-    return updated
+    db = SessionLocal()
+    try:
+        resume_record = db.query(ResumeDB).filter(ResumeDB.student_id == student.id).first()
+        if not resume_record:
+            resume_record = ResumeDB(
+                student_id=student.id,
+                name=student.name, email=student.email, phone=student.phone or "",
+                role="", links="", summary="", education="", skills=", ".join(student.skills), projects="", experience="", achievements="", certifications=""
+            )
+            db.add(resume_record)
+        
+        allowed_fields = {
+            "role",
+            "summary",
+            "skills",
+            "projects",
+            "experience",
+            "achievements",
+            "certifications",
+        }
+        for key, value in payload.patch.items():
+            if key in allowed_fields and isinstance(value, str):
+                setattr(resume_record, key, value)
+        
+        resume_record.updated_at = datetime.now()
+        db.commit()
+        db.refresh(resume_record)
+        
+        return StudentResume(
+            student_id=resume_record.student_id,
+            name=resume_record.name or "",
+            role=resume_record.role or "",
+            email=resume_record.email or "",
+            phone=resume_record.phone or "",
+            links=resume_record.links or "",
+            summary=resume_record.summary or "",
+            education=resume_record.education or "",
+            skills=resume_record.skills or "",
+            projects=resume_record.projects or "",
+            experience=resume_record.experience or "",
+            achievements=resume_record.achievements or "",
+            certifications=resume_record.certifications or "",
+            updated_at=resume_record.updated_at
+        )
+    finally:
+        db.close()
 
 
 @app.get("/api/jobs")
@@ -1845,10 +1964,31 @@ def list_jobs() -> list[Job]:
 def check_resume_for_job(job_id: int, authorization: str | None = Header(default=None)) -> ResumeCheckResult:
     student = require_student(authorization)
     job = find_job(job_id)
-    resume = student_resumes.get(student.id)
-    if resume is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Create a resume before applying.")
-    return ai_resume_check(job, resume)
+    db = SessionLocal()
+    try:
+        resume_record = db.query(ResumeDB).filter(ResumeDB.student_id == student.id).first()
+        if not resume_record:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Create a resume before applying.")
+        
+        resume = StudentResume(
+            student_id=resume_record.student_id,
+            name=resume_record.name or "",
+            role=resume_record.role or "",
+            email=resume_record.email or "",
+            phone=resume_record.phone or "",
+            links=resume_record.links or "",
+            summary=resume_record.summary or "",
+            education=resume_record.education or "",
+            skills=resume_record.skills or "",
+            projects=resume_record.projects or "",
+            experience=resume_record.experience or "",
+            achievements=resume_record.achievements or "",
+            certifications=resume_record.certifications or "",
+            updated_at=resume_record.updated_at
+        )
+        return ai_resume_check(job, resume)
+    finally:
+        db.close()
 
 
 @app.post("/api/jobs/{job_id}/apply", status_code=status.HTTP_201_CREATED)
@@ -2191,45 +2331,56 @@ def export_job_applicants(job_id: int, authorization: str | None = Header(defaul
             "Location",
         ]
     )
-    for application in [item for item in job_applications if item.job_id == job_id]:
-        student = next(item for item in students if item.id == application.student_id)
-        resume = student_resumes.get(student.id, StudentResume(student_id=student.id))
-        attempts = [attempt for attempt in mock_attempts if attempt.student_id == student.id]
-        latest_attempt = max(attempts, key=lambda item: item.created_at) if attempts else None
+    db = SessionLocal()
+    try:
+        db_applications = db.query(ApplicationDB).filter(ApplicationDB.job_id == job_id).all()
+        for application in db_applications:
+            student_record = db.query(StudentDB).filter(StudentDB.id == application.student_id).first()
+            if not student_record:
+                continue
+            
+            resume_record = db.query(ResumeDB).filter(ResumeDB.student_id == student_record.id).first()
+            resume = resume_record if resume_record else ResumeDB(student_id=student_record.id)
+            
+            latest_attempt = db.query(MockInterviewDB).filter(MockInterviewDB.student_id == student_record.id).order_by(MockInterviewDB.created_at.desc()).first()
+    
         writer.writerow(
             [
                 application.id,
                 application.status,
                 application.ats_score or "",
                 "Yes" if application.applied_with_ai_fix else "No",
-                ", ".join(application.matched_keywords),
-                ", ".join(application.missing_keywords),
-                " | ".join(application.ai_suggestions),
-                application.admin_note,
-                application.applied_at.isoformat(),
-                student.name,
-                student.email,
-                student.phone,
-                student.college,
-                student.course,
-                student.graduation_year,
-                ", ".join(student.skills),
-                resume_completion(student.id),
-                resume.role,
-                resume.summary,
-                resume.skills,
-                resume.education,
-                resume.projects,
-                resume.experience,
-                resume.achievements,
-                resume.certifications,
-                resume.links,
+                ", ".join(application.matched_keywords or []),
+                ", ".join(application.missing_keywords or []),
+                " | ".join(application.ai_suggestions or []),
+                application.admin_note or "",
+                application.applied_at.isoformat() if application.applied_at else "",
+                student_record.name,
+                student_record.email,
+                student_record.phone or "",
+                student_record.college or "",
+                student_record.course or "",
+                student_record.graduation_year or "",
+                ", ".join(student_record.skills or []) if isinstance(student_record.skills, list) else "",
+                resume_completion(student_record.id),
+                resume.role or "",
+                resume.summary or "",
+                resume.skills or "",
+                resume.education or "",
+                resume.projects or "",
+                resume.experience or "",
+                resume.achievements or "",
+                resume.certifications or "",
+                resume.links or "",
                 latest_attempt.score if latest_attempt else "",
                 job.title,
                 job.company,
                 job.location,
             ]
         )
+    finally:
+        db.close()
+    
     filename = re.sub(r"[^A-Za-z0-9-]+", "-", f"{job.company}-{job.title}-applicants").strip("-")
     return Response(
         content=output.getvalue(),
