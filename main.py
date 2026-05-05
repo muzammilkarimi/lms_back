@@ -15,6 +15,28 @@ from typing import Any, Literal
 from urllib import request
 from urllib.error import URLError
 from uuid import uuid4
+import hmac
+import base64
+
+JWT_SECRET = os.environ.get("JWT_SECRET", "gyansutra_secret_key_123")
+
+def create_student_token(student_id: int) -> str:
+    payload = base64.urlsafe_b64encode(json.dumps({"id": student_id}).encode()).decode()
+    signature = hmac.new(JWT_SECRET.encode(), payload.encode(), sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+def verify_student_token(token: str) -> int | None:
+    try:
+        if "." not in token: return None
+        payload, signature = token.split(".", 1)
+        expected = hmac.new(JWT_SECRET.encode(), payload.encode(), sha256).hexdigest()
+        if hmac.compare_digest(expected, signature):
+            return json.loads(base64.urlsafe_b64decode(payload).decode()).get("id")
+    except Exception:
+        pass
+    return None
+
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -1557,7 +1579,7 @@ def require_student(authorization: str | None) -> Student:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Student login is required.")
     
     token = authorization.removeprefix("Bearer ").strip()
-    student_id = student_tokens.get(token)
+    student_id = verify_student_token(token)
     if not student_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired. Please login again.")
     
@@ -1571,7 +1593,7 @@ def optional_student(authorization: str | None) -> Student | None:
     if not authorization or not authorization.startswith("Bearer "):
         return None
     token = authorization.removeprefix("Bearer ").strip()
-    student_id = student_tokens.get(token)
+    student_id = verify_student_token(token)
     if not student_id:
         return None
     return find_student_by_id(student_id)
@@ -1679,8 +1701,7 @@ def register_student(payload: StudentRegister) -> dict[str, object]:
         db.commit()
         db.refresh(new_student)
         
-        token = f"st-{uuid4()}"
-        student_tokens[token] = new_student.id
+        token = create_student_token(new_student.id)
         return {"token": token, "student": {
             "id": new_student.id,
             "name": new_student.name,
@@ -1698,8 +1719,7 @@ def student_login(payload: StudentLogin) -> dict[str, object]:
         student = db.query(StudentDB).filter(StudentDB.email == payload.email).first()
         if student is None or student.password_hash != hash_password(payload.password):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid student credentials.")
-        token = f"st-{uuid4()}"
-        student_tokens[token] = student.id
+        token = create_student_token(student.id)
         return {"token": token, "student": {
             "id": student.id,
             "name": student.name,
